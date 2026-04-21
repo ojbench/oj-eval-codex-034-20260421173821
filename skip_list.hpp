@@ -1,13 +1,11 @@
 #ifndef SKIP_LIST_HPP
 #define SKIP_LIST_HPP
 
-#include <iostream>
+#include <vector>
+#include <random>
 #include <optional>
 #include <cstdlib>
 #include <ctime>
-#include <climits>
-#include <vector>
-#include <random>
 
 // Generic skip list supporting insert/search/delete for type T.
 // Requires only operator< on T (strict weak ordering).
@@ -17,16 +15,18 @@ template<typename T>
 class SkipList {
 private:
     struct Node {
-        T value;
-        std::vector<Node*> forward;
-        Node(int lvl, const T& val): value(val), forward(lvl, nullptr) {}
+        std::optional<T> value; // header has no value
+        std::vector<Node*> forward; // forward pointers per level
+        explicit Node(int lvl) : value(std::nullopt), forward(lvl, nullptr) {}
+        Node(int lvl, const T& val) : value(val), forward(lvl, nullptr) {}
     };
 
-    int maxLevel;
-    double p;
-    int level;
-    Node* header;
+    int maxLevel;        // maximum allowed levels
+    double p;            // probability for level promotion
+    int level;           // current highest level
+    Node* header;        // header node with maxLevel forward pointers (no value)
 
+    // RNG for random level
     std::mt19937_64 rng;
     std::uniform_real_distribution<double> dist;
 
@@ -36,6 +36,7 @@ private:
         return lvl;
     }
 
+    // Disable copy
     SkipList(const SkipList&) = delete;
     SkipList& operator=(const SkipList&) = delete;
 
@@ -43,7 +44,7 @@ public:
     SkipList()
         : maxLevel(32), p(0.5), level(1), header(nullptr),
           rng(std::mt19937_64(std::random_device{}())), dist(0.0, 1.0) {
-        header = new Node(maxLevel, T{});
+        header = new Node(maxLevel); // no T construction
     }
 
     ~SkipList() {
@@ -55,18 +56,22 @@ public:
         }
     }
 
+    // Insert a value into the skip list. If the value already exists, do nothing.
     void insert(const T & item) {
         std::vector<Node*> update(maxLevel, nullptr);
         Node* x = header;
         for (int i = level - 1; i >= 0; --i) {
-            while (x->forward[i] && x->forward[i]->value < item) {
+            while (x->forward[i] && x->forward[i]->value.has_value() && x->forward[i]->value.value() < item) {
                 x = x->forward[i];
             }
             update[i] = x;
         }
         x = x->forward[0];
-        if (x && !(item < x->value) && !(x->value < item)) {
-            return; // already exists
+        if (x && x->value.has_value()) {
+            const T& v = x->value.value();
+            if (!(item < v) && !(v < item)) {
+                return; // already exists
+            }
         }
         int rl = randomLevel();
         if (rl > level) {
@@ -80,30 +85,36 @@ public:
         }
     }
 
+    // Search for a value in the skip list
     bool search(const T & item) {
         Node* x = header;
         for (int i = level - 1; i >= 0; --i) {
-            while (x->forward[i] && x->forward[i]->value < item) {
+            while (x->forward[i] && x->forward[i]->value.has_value() && x->forward[i]->value.value() < item) {
                 x = x->forward[i];
             }
         }
         x = x->forward[0];
-        return x && !(item < x->value) && !(x->value < item);
+        if (x && x->value.has_value()) {
+            const T& v = x->value.value();
+            return !(item < v) && !(v < item);
+        }
+        return false;
     }
 
+    // Delete a value from the skip list. If the value does not exist, do nothing.
     void deleteItem(const T & item) {
         std::vector<Node*> update(maxLevel, nullptr);
         Node* x = header;
         for (int i = level - 1; i >= 0; --i) {
-            while (x->forward[i] && x->forward[i]->value < item) {
+            while (x->forward[i] && x->forward[i]->value.has_value() && x->forward[i]->value.value() < item) {
                 x = x->forward[i];
             }
             update[i] = x;
         }
         x = x->forward[0];
-        if (!x || (item < x->value) || (x->value < item)) {
-            return; // not found
-        }
+        if (!(x && x->value.has_value())) return; // not found
+        const T& v = x->value.value();
+        if ((item < v) || (v < item)) return; // not found
         int rl = static_cast<int>(x->forward.size());
         for (int i = 0; i < rl; ++i) {
             if (update[i]->forward[i] == x) {
